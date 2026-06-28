@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dynamic HTML5 Canvas State Drift</title>
+  <style>
+    body {
+      font-family: 'Outfit', 'Inter', sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .container {
+      background: #1e293b;
+      padding: 24px;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+      border: 1px solid #334155;
+      text-align: center;
+      max-width: 600px;
+      width: 100%;
+    }
+    h1 {
+      margin-top: 0;
+      color: #38bdf8;
+      font-size: 1.5rem;
+    }
+    canvas {
+      background: #020617;
+      border: 2px solid #334155;
+      border-radius: 8px;
+      margin: 16px 0;
+      cursor: crosshair;
+    }
+    .panel {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      text-align: left;
+      font-size: 0.875rem;
+    }
+    .card {
+      background: #0f172a;
+      padding: 12px;
+      border-radius: 6px;
+      border: 1px solid #1e293b;
+    }
+    .label {
+      color: #94a3b8;
+      font-weight: bold;
+    }
+    .val {
+      font-family: monospace;
+      color: #e2e8f0;
+    }
+    .alert-safe {
+      color: #4ade80;
+    }
+    .alert-danger {
+      color: #ef4444;
+    }
+    .alert-warning {
+      color: #f59e0b;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Frugal Canvas Automation Playground</h1>
+    <canvas id="app-canvas" width="500" height="500"></canvas>
+    
+    <div class="panel">
+      <div class="card">
+        <div><span class="label">State:</span> <span id="lbl-state" class="val alert-warning">Loading</span></div>
+        <div><span class="label">Target Coords:</span> <span id="lbl-coords" class="val">x: 0, y: 0</span></div>
+        <div><span class="label">Corrupted Data:</span> <span id="lbl-corrupt" class="val alert-safe">None</span></div>
+      </div>
+      <div class="card">
+        <div><span class="label">Hover Event:</span> <span id="lbl-hover" class="val">No</span></div>
+        <div><span class="label">Drag Event (15px):</span> <span id="lbl-drag" class="val">No</span></div>
+        <div><span class="label">Click Event:</span> <span id="lbl-click" class="val">No</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('app-canvas');
+    const ctx = canvas.getContext('2d');
+    
+    // UI elements
+    const lblState = document.getElementById('lbl-state');
+    const lblCoords = document.getElementById('lbl-coords');
+    const lblCorrupt = document.getElementById('lbl-corrupt');
+    const lblHover = document.getElementById('lbl-hover');
+    const lblDrag = document.getElementById('lbl-drag');
+    const lblClick = document.getElementById('lbl-click');
+
+    // Local application state
+    let target = { x: 250, y: 250, color: '#808080', state: 'loading' };
+    let dragStart = null;
+    let dragDistance = 0;
+    let ws;
+
+    // Connect to WebSocket
+    function connectWS() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}`;
+      ws = new WebSocket(wsUrl);
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'state-update') {
+            handleStateUpdate(data);
+          } else if (data.type === 'action-feedback') {
+            console.log('Action feedback:', data.message);
+          }
+        } catch (e) {
+          console.error('Failed to parse WebSocket message', e);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket closed. Retrying...');
+        setTimeout(connectWS, 1000);
+      };
+    }
+
+    // Handle WebSocket state updates and process invalid coordinates safely
+    function handleStateUpdate(data) {
+      let rawX = data.x;
+      let rawY = data.y;
+      
+      let parsedX = Number(rawX);
+      let parsedY = Number(rawY);
+      
+      let isCorrupted = false;
+
+      // Validate coordinates for floats, scientific notations (like 1e+7), and NaN
+      if (isNaN(parsedX) || isNaN(parsedY) || !isFinite(parsedX) || !isFinite(parsedY)) {
+        isCorrupted = true;
+        parsedX = 250;
+        parsedY = 250;
+      } else if (Math.abs(parsedX) > 10000 || Math.abs(parsedY) > 10000) {
+        // Handle extreme scientific values like 1e+7
+        isCorrupted = true;
+        parsedX = 250;
+        parsedY = 250;
+      } else {
+        // Floating point values are kept but parsed.
+        // We clamp to canvas boundary to be safe
+        if (parsedX < 0 || parsedX > canvas.width || parsedY < 0 || parsedY > canvas.height) {
+          isCorrupted = true;
+          parsedX = Math.max(0, Math.min(canvas.width, parsedX));
+          parsedY = Math.max(0, Math.min(canvas.height, parsedY));
+        }
+      }
+
+      if (isCorrupted) {
+        lblCorrupt.textContent = 'Safe (Corrupted Data Handled)';
+        lblCorrupt.className = 'val alert-danger';
+      } else {
+        // If data matches raw and is valid, check if it's floating point
+        if (rawX !== Math.round(rawX) || rawY !== Math.round(rawY)) {
+          lblCorrupt.textContent = 'Handled Float State';
+          lblCorrupt.className = 'val alert-warning';
+        } else {
+          lblCorrupt.textContent = 'None';
+          lblCorrupt.className = 'val alert-safe';
+        }
+      }
+
+      target.x = parsedX;
+      target.y = parsedY;
+      target.state = data.state;
+      target.color = data.color;
+
+      lblState.textContent = target.state.toUpperCase();
+      lblState.className = `val ${target.state === 'active' ? 'alert-safe' : 'alert-warning'}`;
+      lblCoords.textContent = `x: ${target.x.toFixed(2)}, y: ${target.y.toFixed(2)}`;
+    }
+
+    // Render Canvas Loop using requestAnimationFrame
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw background grid lines to make it look premium
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 1;
+      for (let i = 50; i < canvas.width; i += 50) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i, canvas.height);
+        ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.moveTo(0, i);
+        ctx.lineTo(canvas.width, i);
+        ctx.stroke();
+      }
+
+      // Draw the target
+      ctx.beginPath();
+      ctx.arc(target.x, target.y, 20, 0, 2 * Math.PI);
+      ctx.fillStyle = target.color;
+      ctx.fill();
+      
+      // Draw outer indicator ring
+      ctx.beginPath();
+      ctx.arc(target.x, target.y, 30, 0, 2 * Math.PI);
+      ctx.strokeStyle = target.color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Draw center dot
+      ctx.beginPath();
+      ctx.arc(target.x, target.y, 4, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+
+      requestAnimationFrame(draw);
+    }
+
+    // Local Interaction Verification logic
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      
+      const dist = Math.hypot(mouseX - target.x, mouseY - target.y);
+      
+      if (dist <= 30) {
+        lblHover.textContent = 'Yes (Hovering target)';
+        lblHover.className = 'val alert-safe';
+      } else {
+        lblHover.textContent = 'No';
+        lblHover.className = 'val';
+      }
+
+      if (dragStart) {
+        const currentDist = Math.hypot(mouseX - dragStart.x, mouseY - dragStart.y);
+        dragDistance = currentDist;
+        if (dragDistance >= 15) {
+          lblDrag.textContent = `Yes (Dragged ${Math.round(dragDistance)}px)`;
+          lblDrag.className = 'val alert-safe';
+        }
+      }
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      
+      const dist = Math.hypot(mouseX - target.x, mouseY - target.y);
+      if (dist <= 30) {
+        dragStart = { x: mouseX, y: mouseY };
+        dragDistance = 0;
+      }
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      dragStart = null;
+    });
+
+    canvas.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      
+      const dist = Math.hypot(mouseX - target.x, mouseY - target.y);
+      if (dist <= 30) {
+        lblClick.textContent = `Yes (Clicked target)`;
+        lblClick.className = 'val alert-safe';
+        
+        // Notify backend of target click
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'click-target', x: mouseX, y: mouseY }));
+        }
+      } else {
+        lblClick.textContent = `No (Missed target at ${Math.round(dist)}px)`;
+        lblClick.className = 'val alert-danger';
+      }
+    });
+
+    // Start
+    connectWS();
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>
