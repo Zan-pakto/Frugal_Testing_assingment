@@ -1,0 +1,12 @@
+{
+  "name": "q3-shadow-dom-accessibility",
+  "version": "1.0.0",
+  "description": "Shadow DOM Traversal & Accessibility Pathfinding Utility Tests",
+  "main": "shadowTraversal.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "jsdom": "^24.1.0"
+  }
+}
